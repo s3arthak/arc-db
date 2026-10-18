@@ -104,6 +104,19 @@ same length, the one returned follows first-discovery order, which comes from
 the edge order used to build the graph. See
 [docs/algorithms/bfs.md](docs/algorithms/bfs.md).
 
+## Benchmarks
+
+`benchmarks/graph` times CSR construction, neighbor lookup, BFS, and shortest
+path on deterministic sparse graphs (10K, 100K, and 1M vertices with four
+outgoing edges per vertex):
+
+```bash
+go test -bench=. -benchmem ./benchmarks/graph/...
+```
+
+See [benchmarks/README.md](benchmarks/README.md) for the graph generator, what
+`ns/op`, `B/op`, and `allocs/op` mean, and how to run a single size.
+
 ## Roadmap
 
 | Phase | Deliverable | Status |
@@ -111,12 +124,13 @@ the edge order used to build the graph. See
 | 0 | Repository, CI, build/test loop | done |
 | 1 | Immutable CSR graph + builder + `Neighbors` | done |
 | 2 | BFS, shortest path reconstruction | done |
-| 3 | Bidirectional BFS, benchmarks, profiling | next |
-| 4 | Adaptive execution controller (rule-based cost model) | planned |
-| 5 | Persistence: versioned binary format | planned |
-| 6 | WAL + crash recovery | planned |
-| 7 | Query language: lexer → parser → AST → plan → execute | planned |
-| 8 | Concurrency: snapshots, copy-on-write, delta layer | planned |
+| 3 | Benchmark baseline for kernel, BFS, shortest path | done |
+| 4 | Bidirectional BFS, profiling | next |
+| 5 | Adaptive execution controller (rule-based cost model) | planned |
+| 6 | Persistence: versioned binary format | planned |
+| 7 | WAL + crash recovery | planned |
+| 8 | Query language: lexer → parser → AST → plan → execute | planned |
+| 9 | Concurrency: snapshots, copy-on-write, delta layer | planned |
 
 ## Design notes
 
