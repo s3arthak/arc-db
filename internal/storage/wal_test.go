@@ -43,22 +43,22 @@ func TestWALAppendAndReplay(t *testing.T) {
 	}{
 		{
 			name:  "single record",
-			edges: []AddEdge{{Source: 0, Destination: 1}},
+			edges: []AddEdge{{Sequence: 1, Source: 0, Destination: 1}},
 		},
 		{
 			name: "multiple records keep order",
 			edges: []AddEdge{
-				{Source: 0, Destination: 1},
-				{Source: 1, Destination: 2},
-				{Source: 2, Destination: 0},
-				{Source: 3, Destination: 3},
+				{Sequence: 4, Source: 0, Destination: 1},
+				{Sequence: 7, Source: 1, Destination: 2},
+				{Sequence: 8, Source: 2, Destination: 0},
+				{Sequence: 9, Source: 3, Destination: 3},
 			},
 		},
 		{
 			name: "duplicate records are preserved",
 			edges: []AddEdge{
-				{Source: 0, Destination: 1},
-				{Source: 0, Destination: 1},
+				{Sequence: 2, Source: 0, Destination: 1},
+				{Sequence: 3, Source: 0, Destination: 1},
 			},
 		},
 	}
@@ -99,7 +99,10 @@ func TestWALSyncedRecordsSurviveReopen(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "graph.wal")
 
 	wal := openTestWAL(t, path)
-	appendTestEdges(t, wal, AddEdge{Source: 0, Destination: 1}, AddEdge{Source: 1, Destination: 2})
+	appendTestEdges(t, wal,
+		AddEdge{Sequence: 1, Source: 0, Destination: 1},
+		AddEdge{Sequence: 2, Source: 1, Destination: 2},
+	)
 	if err := wal.Sync(); err != nil {
 		t.Fatalf("Sync() error = %v", err)
 	}
@@ -112,13 +115,16 @@ func TestWALSyncedRecordsSurviveReopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Replay() after reopen error = %v, want nil", err)
 	}
-	want := []AddEdge{{Source: 0, Destination: 1}, {Source: 1, Destination: 2}}
+	want := []AddEdge{
+		{Sequence: 1, Source: 0, Destination: 1},
+		{Sequence: 2, Source: 1, Destination: 2},
+	}
 	if !slices.Equal(records, want) {
 		t.Fatalf("Replay() after reopen = %v, want %v", records, want)
 	}
 
 	// Appending after reopening must extend the log, not overwrite it.
-	appendTestEdges(t, reopened, AddEdge{Source: 2, Destination: 3})
+	appendTestEdges(t, reopened, AddEdge{Sequence: 3, Source: 2, Destination: 3})
 	if err := reopened.Sync(); err != nil {
 		t.Fatalf("Sync() after reopen error = %v", err)
 	}
@@ -131,7 +137,7 @@ func TestWALSyncedRecordsSurviveReopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Replay() after second reopen error = %v, want nil", err)
 	}
-	want = append(want, AddEdge{Source: 2, Destination: 3})
+	want = append(want, AddEdge{Sequence: 3, Source: 2, Destination: 3})
 	if !slices.Equal(records, want) {
 		t.Fatalf("Replay() after second reopen = %v, want %v", records, want)
 	}
@@ -139,7 +145,10 @@ func TestWALSyncedRecordsSurviveReopen(t *testing.T) {
 
 func TestWALReplayIsRepeatable(t *testing.T) {
 	wal := openTestWAL(t, filepath.Join(t.TempDir(), "graph.wal"))
-	appendTestEdges(t, wal, AddEdge{Source: 0, Destination: 1}, AddEdge{Source: 2, Destination: 3})
+	appendTestEdges(t, wal,
+		AddEdge{Sequence: 1, Source: 0, Destination: 1},
+		AddEdge{Sequence: 2, Source: 2, Destination: 3},
+	)
 	if err := wal.Sync(); err != nil {
 		t.Fatalf("Sync() error = %v", err)
 	}
@@ -157,6 +166,43 @@ func TestWALReplayIsRepeatable(t *testing.T) {
 	}
 }
 
+func TestWALResetDiscardsRecords(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "graph.wal")
+	wal := openTestWAL(t, path)
+	appendTestEdges(t, wal,
+		AddEdge{Sequence: 1, Source: 0, Destination: 1},
+		AddEdge{Sequence: 2, Source: 1, Destination: 2},
+	)
+	if err := wal.Sync(); err != nil {
+		t.Fatalf("Sync() error = %v", err)
+	}
+
+	if err := wal.Reset(); err != nil {
+		t.Fatalf("Reset() error = %v", err)
+	}
+	records, err := wal.Replay()
+	if err != nil {
+		t.Fatalf("Replay() after Reset error = %v", err)
+	}
+	if len(records) != 0 {
+		t.Fatalf("Replay() after Reset = %v, want no records", records)
+	}
+
+	// The log must still be appendable after a reset.
+	appendTestEdges(t, wal, AddEdge{Sequence: 3, Source: 2, Destination: 3})
+	if err := wal.Sync(); err != nil {
+		t.Fatalf("Sync() after Reset error = %v", err)
+	}
+	records, err = wal.Replay()
+	if err != nil {
+		t.Fatalf("Replay() after append error = %v", err)
+	}
+	want := []AddEdge{{Sequence: 3, Source: 2, Destination: 3}}
+	if !slices.Equal(records, want) {
+		t.Fatalf("Replay() after append = %v, want %v", records, want)
+	}
+}
+
 func TestRecoverFromSnapshotAndWAL(t *testing.T) {
 	dir := t.TempDir()
 	snapshotPath := filepath.Join(dir, "graph.arcdb")
@@ -167,15 +213,15 @@ func TestRecoverFromSnapshotAndWAL(t *testing.T) {
 		{From: 1, To: 2},
 		{From: 2, To: 3},
 	})
-	if err := Save(snapshotPath, base); err != nil {
+	if err := Save(snapshotPath, base, 0); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
 
 	wal := openTestWAL(t, walPath)
 	appendTestEdges(t, wal,
-		AddEdge{Source: 0, Destination: 3},
-		AddEdge{Source: 3, Destination: 0},
-		AddEdge{Source: 0, Destination: 3}, // duplicate of the snapshot mutation
+		AddEdge{Sequence: 1, Source: 0, Destination: 3},
+		AddEdge{Sequence: 2, Source: 3, Destination: 0},
+		AddEdge{Sequence: 3, Source: 0, Destination: 3}, // duplicate of the previous mutation
 	)
 	if err := wal.Sync(); err != nil {
 		t.Fatalf("Sync() error = %v", err)
@@ -203,13 +249,51 @@ func TestRecoverFromSnapshotAndWAL(t *testing.T) {
 	}
 }
 
+func TestRecoverFiltersByCheckpoint(t *testing.T) {
+	dir := t.TempDir()
+	snapshotPath := filepath.Join(dir, "graph.arcdb")
+	walPath := filepath.Join(dir, "graph.wal")
+
+	// The snapshot already represents sequences 1 and 2.
+	base := buildGraph(t, 4, []graph.Edge{{From: 0, To: 1}})
+	if err := Save(snapshotPath, base, 2); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	wal := openTestWAL(t, walPath)
+	appendTestEdges(t, wal,
+		AddEdge{Sequence: 1, Source: 0, Destination: 2}, // covered by checkpoint
+		AddEdge{Sequence: 2, Source: 0, Destination: 3}, // covered by checkpoint
+		AddEdge{Sequence: 3, Source: 1, Destination: 2}, // new
+		AddEdge{Sequence: 4, Source: 2, Destination: 3}, // new
+	)
+	if err := wal.Sync(); err != nil {
+		t.Fatalf("Sync() error = %v", err)
+	}
+	if err := wal.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	recovered, err := Recover(snapshotPath, walPath)
+	if err != nil {
+		t.Fatalf("Recover() error = %v, want nil", err)
+	}
+
+	want := buildGraph(t, 4, []graph.Edge{
+		{From: 0, To: 1},
+		{From: 1, To: 2},
+		{From: 2, To: 3},
+	})
+	assertEquivalentGraphs(t, want, recovered)
+}
+
 func TestRecoverWithEmptyWAL(t *testing.T) {
 	dir := t.TempDir()
 	snapshotPath := filepath.Join(dir, "graph.arcdb")
 	walPath := filepath.Join(dir, "graph.wal")
 
 	base := buildGraph(t, 3, []graph.Edge{{From: 0, To: 2}, {From: 2, To: 2}})
-	if err := Save(snapshotPath, base); err != nil {
+	if err := Save(snapshotPath, base, 0); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
 
@@ -229,17 +313,23 @@ func TestRecoverRejectsInvalidVertexIDs(t *testing.T) {
 	}{
 		{
 			name:      "destination outside snapshot",
-			mutations: []AddEdge{{Source: 0, Destination: 3}},
+			mutations: []AddEdge{{Sequence: 1, Source: 0, Destination: 3}},
 		},
 		{
 			name:      "source outside snapshot",
-			mutations: []AddEdge{{Source: 3, Destination: 0}},
+			mutations: []AddEdge{{Sequence: 1, Source: 3, Destination: 0}},
 		},
 		{
 			name: "valid record followed by invalid record",
 			mutations: []AddEdge{
-				{Source: 0, Destination: 2},
-				{Source: 2, Destination: 9},
+				{Sequence: 1, Source: 0, Destination: 2},
+				{Sequence: 2, Source: 2, Destination: 9},
+			},
+		},
+		{
+			name: "invalid record covered by checkpoint is ignored",
+			mutations: []AddEdge{
+				{Sequence: 1, Source: 0, Destination: 9},
 			},
 		},
 	}
@@ -251,7 +341,11 @@ func TestRecoverRejectsInvalidVertexIDs(t *testing.T) {
 			walPath := filepath.Join(dir, "graph.wal")
 
 			base := buildGraph(t, 3, []graph.Edge{{From: 0, To: 1}})
-			if err := Save(snapshotPath, base); err != nil {
+			checkpoint := uint64(0)
+			if tc.name == "invalid record covered by checkpoint is ignored" {
+				checkpoint = 1
+			}
+			if err := Save(snapshotPath, base, checkpoint); err != nil {
 				t.Fatalf("Save() error = %v", err)
 			}
 
@@ -265,6 +359,14 @@ func TestRecoverRejectsInvalidVertexIDs(t *testing.T) {
 			}
 
 			recovered, err := Recover(snapshotPath, walPath)
+			if checkpoint == 1 {
+				if err != nil {
+					t.Fatalf("Recover() error = %v, want nil for a covered record", err)
+				}
+				assertEquivalentGraphs(t, base, recovered)
+				return
+			}
+
 			if !errors.Is(err, ErrInvalidWAL) {
 				t.Fatalf("Recover() error = %v, want %v", err, ErrInvalidWAL)
 			}
@@ -296,6 +398,11 @@ func TestOpenWALRejectsMalformedHeader(t *testing.T) {
 			data:    walHeaderBytes(walVersion + 1),
 			wantErr: ErrUnsupportedWALVersion,
 		},
+		{
+			name:    "version 1 WAL",
+			data:    walHeaderBytes(1),
+			wantErr: ErrUnsupportedWALVersion,
+		},
 	}
 
 	for _, tc := range tests {
@@ -320,19 +427,37 @@ func TestWALReplayRejectsMalformedRecords(t *testing.T) {
 	}{
 		{
 			name: "unknown record type",
-			body: walRecordBytes(9, addEdgePayloadSize, make([]byte, addEdgePayloadSize)),
+			body: walRecordBytes(9, addEdgePayloadSize, 1, make([]byte, addEdgePayloadSize)),
 		},
 		{
 			name: "payload too small",
-			body: walRecordBytes(recordTypeAddEdge, addEdgePayloadSize-4, make([]byte, addEdgePayloadSize-4)),
+			body: walRecordBytes(recordTypeAddEdge, addEdgePayloadSize-4, 1, make([]byte, addEdgePayloadSize-4)),
 		},
 		{
 			name: "payload too large",
-			body: walRecordBytes(recordTypeAddEdge, addEdgePayloadSize+4, make([]byte, addEdgePayloadSize+4)),
+			body: walRecordBytes(recordTypeAddEdge, addEdgePayloadSize+4, 1, make([]byte, addEdgePayloadSize+4)),
 		},
 		{
 			name: "zero payload",
-			body: walRecordBytes(recordTypeAddEdge, 0, nil),
+			body: walRecordBytes(recordTypeAddEdge, 0, 1, nil),
+		},
+		{
+			name: "duplicate sequence",
+			body: bytes.Join([][]byte{
+				addEdgeRecordBytes(1, 0, 1),
+				addEdgeRecordBytes(1, 1, 2),
+			}, nil),
+		},
+		{
+			name: "decreasing sequence",
+			body: bytes.Join([][]byte{
+				addEdgeRecordBytes(5, 0, 1),
+				addEdgeRecordBytes(4, 1, 2),
+			}, nil),
+		},
+		{
+			name: "zero sequence",
+			body: addEdgeRecordBytes(0, 0, 1),
 		},
 	}
 
@@ -353,7 +478,8 @@ func TestWALReplayRejectsMalformedRecords(t *testing.T) {
 }
 
 func TestWALReplayIgnoresIncompleteFinalRecord(t *testing.T) {
-	complete := addEdgeRecordBytes(2, 3)
+	complete := addEdgeRecordBytes(2, 2, 3)
+	torn := addEdgeRecordBytes(3, 2, 3)
 
 	tests := []struct {
 		name string
@@ -361,11 +487,11 @@ func TestWALReplayIgnoresIncompleteFinalRecord(t *testing.T) {
 	}{
 		{
 			name: "partial record header",
-			tail: complete[:5],
+			tail: torn[:5],
 		},
 		{
 			name: "partial payload",
-			tail: complete[:recordHeaderSize+3],
+			tail: torn[:recordHeaderSize+3],
 		},
 	}
 
@@ -379,7 +505,7 @@ func TestWALReplayIgnoresIncompleteFinalRecord(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Replay() error = %v, want nil for an interrupted final record", err)
 			}
-			want := []AddEdge{{Source: 2, Destination: 3}}
+			want := []AddEdge{{Sequence: 2, Source: 2, Destination: 3}}
 			if !slices.Equal(records, want) {
 				t.Fatalf("Replay() = %v, want %v", records, want)
 			}
@@ -415,13 +541,14 @@ func openTestWAL(t *testing.T, path string) *WAL {
 	return wal
 }
 
-// appendTestEdges appends every mutation, failing the test on the first error.
+// appendTestEdges appends every mutation with its recorded sequence, failing the
+// test on the first error.
 func appendTestEdges(t *testing.T, wal *WAL, edges ...AddEdge) {
 	t.Helper()
 
 	for _, edge := range edges {
-		if err := wal.AppendAddEdge(edge.Source, edge.Destination); err != nil {
-			t.Fatalf("AppendAddEdge(%d, %d) error = %v", edge.Source, edge.Destination, err)
+		if err := wal.AppendAddEdge(edge.Sequence, edge.Source, edge.Destination); err != nil {
+			t.Fatalf("AppendAddEdge(%d, %d, %d) error = %v", edge.Sequence, edge.Source, edge.Destination, err)
 		}
 	}
 }
@@ -451,21 +578,22 @@ func walHeaderBytesWithMagic(magic string, version uint32) []byte {
 }
 
 // walRecordBytes frames a record with an arbitrary type, declared payload size,
-// and payload bytes.
-func walRecordBytes(recordType, payloadSize uint32, payload []byte) []byte {
+// sequence, and payload bytes.
+func walRecordBytes(recordType, payloadSize uint32, sequence uint64, payload []byte) []byte {
 	data := make([]byte, recordHeaderSize+len(payload))
 
 	binary.LittleEndian.PutUint32(data[recordTypeOffset:recordLengthOffset], recordType)
-	binary.LittleEndian.PutUint32(data[recordLengthOffset:recordHeaderSize], payloadSize)
+	binary.LittleEndian.PutUint32(data[recordLengthOffset:recordSequenceOffset], payloadSize)
+	binary.LittleEndian.PutUint64(data[recordSequenceOffset:recordHeaderSize], sequence)
 	copy(data[recordHeaderSize:], payload)
 	return data
 }
 
 // addEdgeRecordBytes encodes a well-formed ADD_EDGE record.
-func addEdgeRecordBytes(source, destination uint32) []byte {
+func addEdgeRecordBytes(sequence uint64, source, destination uint32) []byte {
 	payload := make([]byte, addEdgePayloadSize)
 	binary.LittleEndian.PutUint32(payload[0:4], source)
 	binary.LittleEndian.PutUint32(payload[4:addEdgePayloadSize], destination)
 
-	return walRecordBytes(recordTypeAddEdge, addEdgePayloadSize, payload)
+	return walRecordBytes(recordTypeAddEdge, addEdgePayloadSize, sequence, payload)
 }

@@ -17,6 +17,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 		name        string
 		vertexCount int64
 		edges       []graph.Edge
+		checkpoint  uint64
 	}{
 		{
 			name:        "empty graph",
@@ -25,11 +26,13 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 		{
 			name:        "single vertex",
 			vertexCount: 1,
+			checkpoint:  7,
 		},
 		{
 			name:        "single edge",
 			vertexCount: 2,
 			edges:       []graph.Edge{{From: 0, To: 1}},
+			checkpoint:  11,
 		},
 		{
 			name:        "multiple vertices",
@@ -45,6 +48,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 			name:        "disconnected vertices",
 			vertexCount: 5,
 			edges:       []graph.Edge{{From: 1, To: 3}, {From: 4, To: 0}},
+			checkpoint:  3,
 		},
 		{
 			name:        "self loop",
@@ -66,6 +70,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 			name:        "generated graph",
 			vertexCount: 5000,
 			edges:       generatedEdges(5000),
+			checkpoint:  12345,
 		},
 	}
 
@@ -74,12 +79,15 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 			original := buildGraph(t, tc.vertexCount, tc.edges)
 			path := filepath.Join(t.TempDir(), "snapshot.arcdb")
 
-			if err := Save(path, original); err != nil {
+			if err := Save(path, original, tc.checkpoint); err != nil {
 				t.Fatalf("Save() error = %v, want nil", err)
 			}
-			loaded, err := Load(path)
+			loaded, checkpoint, err := Load(path)
 			if err != nil {
 				t.Fatalf("Load() error = %v, want nil", err)
+			}
+			if checkpoint != tc.checkpoint {
+				t.Errorf("checkpoint = %d, want %d", checkpoint, tc.checkpoint)
 			}
 
 			assertEquivalentGraphs(t, original, loaded)
@@ -91,12 +99,15 @@ func TestSaveLoadZeroValueGraph(t *testing.T) {
 	var zero graph.Graph
 
 	path := filepath.Join(t.TempDir(), "snapshot.arcdb")
-	if err := Save(path, &zero); err != nil {
+	if err := Save(path, &zero, 0); err != nil {
 		t.Fatalf("Save() error = %v, want nil", err)
 	}
-	loaded, err := Load(path)
+	loaded, checkpoint, err := Load(path)
 	if err != nil {
 		t.Fatalf("Load() error = %v, want nil", err)
+	}
+	if checkpoint != 0 {
+		t.Errorf("checkpoint = %d, want 0", checkpoint)
 	}
 
 	if got := loaded.VertexCount(); got != 0 {
@@ -115,7 +126,7 @@ func TestSaveLoadZeroValueGraph(t *testing.T) {
 
 func TestSnapshotLayout(t *testing.T) {
 	g := buildGraph(t, 3, []graph.Edge{{From: 0, To: 2}, {From: 2, To: 1}})
-	data := encodeGraph(t, g)
+	data := encodeGraph(t, g, 99)
 
 	wantSize := headerSize + offsetBytes*(g.VertexCount()+1) + edgeByteSize*g.EdgeCount()
 	if len(data) != wantSize {
@@ -130,8 +141,11 @@ func TestSnapshotLayout(t *testing.T) {
 	if got := binary.LittleEndian.Uint64(data[vertexCountOffset:edgeCountOffset]); got != 3 {
 		t.Errorf("vertex count field = %d, want 3", got)
 	}
-	if got := binary.LittleEndian.Uint64(data[edgeCountOffset:headerSize]); got != 2 {
+	if got := binary.LittleEndian.Uint64(data[edgeCountOffset:checkpointOffset]); got != 2 {
 		t.Errorf("edge count field = %d, want 2", got)
+	}
+	if got := binary.LittleEndian.Uint64(data[checkpointOffset:headerSize]); got != 99 {
+		t.Errorf("checkpoint field = %d, want 99", got)
 	}
 
 	position := headerSize
@@ -160,10 +174,10 @@ func TestSaveIsDeterministic(t *testing.T) {
 	first := filepath.Join(dir, "first.arcdb")
 	second := filepath.Join(dir, "second.arcdb")
 
-	if err := Save(first, g); err != nil {
+	if err := Save(first, g, 5); err != nil {
 		t.Fatalf("Save(%q) error = %v", first, err)
 	}
-	if err := Save(second, g); err != nil {
+	if err := Save(second, g, 5); err != nil {
 		t.Fatalf("Save(%q) error = %v", second, err)
 	}
 
@@ -202,7 +216,7 @@ func TestSaveRejectsInvalidGraph(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "snapshot.arcdb")
-			if err := Save(path, tc.graph); err == nil {
+			if err := Save(path, tc.graph, 0); err == nil {
 				t.Fatal("Save() error = nil, want error")
 			}
 			if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
@@ -216,7 +230,7 @@ func TestLoadRejectsMalformedSnapshots(t *testing.T) {
 	valid := encodeGraph(t, buildGraph(t, 3, []graph.Edge{
 		{From: 0, To: 2},
 		{From: 2, To: 1},
-	}))
+	}), 0)
 
 	tests := []struct {
 		name    string
@@ -248,6 +262,13 @@ func TestLoadRejectsMalformedSnapshots(t *testing.T) {
 			wantErr: ErrUnsupportedVersion,
 		},
 		{
+			name: "version 1 snapshot",
+			data: corrupt(valid, func(b []byte) {
+				binary.LittleEndian.PutUint32(b[versionOffset:vertexCountOffset], 1)
+			}),
+			wantErr: ErrUnsupportedVersion,
+		},
+		{
 			name:    "truncated offsets",
 			data:    valid[:headerSize+2*offsetBytes+edgeByteSize],
 			wantErr: ErrInvalidSnapshot,
@@ -265,38 +286,38 @@ func TestLoadRejectsMalformedSnapshots(t *testing.T) {
 		{
 			name: "header edge count mismatch",
 			data: corrupt(valid, func(b []byte) {
-				binary.LittleEndian.PutUint64(b[edgeCountOffset:headerSize], 1)
+				binary.LittleEndian.PutUint64(b[edgeCountOffset:checkpointOffset], 1)
 			}),
 			wantErr: ErrInvalidSnapshot,
 		},
 		{
 			name:    "missing offsets",
-			data:    rawSnapshot(3, 0, []uint64{0, 0}, nil),
+			data:    rawSnapshot(3, 0, 0, []uint64{0, 0}, nil),
 			wantErr: ErrInvalidSnapshot,
 		},
 		{
 			name:    "offsets decrease",
-			data:    rawSnapshot(2, 2, []uint64{0, 2, 1}, []uint32{1, 1}),
+			data:    rawSnapshot(2, 2, 0, []uint64{0, 2, 1}, []uint32{1, 1}),
 			wantErr: ErrInvalidSnapshot,
 		},
 		{
 			name:    "final offset mismatch",
-			data:    rawSnapshot(2, 0, []uint64{0, 1, 1}, nil),
+			data:    rawSnapshot(2, 0, 0, []uint64{0, 1, 1}, nil),
 			wantErr: ErrInvalidSnapshot,
 		},
 		{
 			name:    "edge target out of range",
-			data:    rawSnapshot(2, 1, []uint64{0, 1, 1}, []uint32{5}),
+			data:    rawSnapshot(2, 1, 0, []uint64{0, 1, 1}, []uint32{5}),
 			wantErr: ErrInvalidSnapshot,
 		},
 		{
 			name:    "vertex count above limit",
-			data:    rawSnapshot(maxVertexCount+1, 0, nil, nil),
+			data:    rawSnapshot(maxVertexCount+1, 0, 0, nil, nil),
 			wantErr: ErrInvalidSnapshot,
 		},
 		{
 			name:    "counts larger than the file",
-			data:    rawSnapshot(maxVertexCount, 0, nil, nil),
+			data:    rawSnapshot(maxVertexCount, 0, 0, nil, nil),
 			wantErr: ErrInvalidSnapshot,
 		},
 	}
@@ -308,19 +329,22 @@ func TestLoadRejectsMalformedSnapshots(t *testing.T) {
 				t.Fatalf("WriteFile() error = %v", err)
 			}
 
-			g, err := Load(path)
+			g, checkpoint, err := Load(path)
 			if !errors.Is(err, tc.wantErr) {
 				t.Fatalf("Load() error = %v, want %v", err, tc.wantErr)
 			}
 			if g != nil {
 				t.Fatalf("Load() graph = %v, want nil on error", g)
 			}
+			if checkpoint != 0 {
+				t.Fatalf("Load() checkpoint = %d, want 0 on error", checkpoint)
+			}
 		})
 	}
 }
 
 func TestLoadMissingFile(t *testing.T) {
-	_, err := Load(filepath.Join(t.TempDir(), "absent.arcdb"))
+	_, _, err := Load(filepath.Join(t.TempDir(), "absent.arcdb"))
 	if !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("Load() error = %v, want it to wrap %v", err, os.ErrNotExist)
 	}
@@ -374,11 +398,11 @@ func buildGraph(t *testing.T, vertexCount int64, edges []graph.Edge) *graph.Grap
 }
 
 // encodeGraph serializes g to memory with the same encoder Save uses.
-func encodeGraph(t *testing.T, g *graph.Graph) []byte {
+func encodeGraph(t *testing.T, g *graph.Graph, checkpoint uint64) []byte {
 	t.Helper()
 
 	var buf bytes.Buffer
-	if err := writeSnapshot(&buf, g); err != nil {
+	if err := writeSnapshot(&buf, g, checkpoint); err != nil {
 		t.Fatalf("writeSnapshot() error = %v", err)
 	}
 	return buf.Bytes()
@@ -394,13 +418,14 @@ func corrupt(data []byte, fn func([]byte)) []byte {
 // rawSnapshot encodes arbitrary header counts and arrays, including values a
 // valid graph could never produce. It lets corruption tests target one check at
 // a time.
-func rawSnapshot(vertexCount, edgeCount uint64, offsets []uint64, edges []uint32) []byte {
+func rawSnapshot(vertexCount, edgeCount, checkpoint uint64, offsets []uint64, edges []uint32) []byte {
 	data := make([]byte, headerSize+len(offsets)*offsetBytes+len(edges)*edgeByteSize)
 
 	copy(data[:magicSize], magic)
 	binary.LittleEndian.PutUint32(data[versionOffset:vertexCountOffset], formatVersion)
 	binary.LittleEndian.PutUint64(data[vertexCountOffset:edgeCountOffset], vertexCount)
-	binary.LittleEndian.PutUint64(data[edgeCountOffset:headerSize], edgeCount)
+	binary.LittleEndian.PutUint64(data[edgeCountOffset:checkpointOffset], edgeCount)
+	binary.LittleEndian.PutUint64(data[checkpointOffset:headerSize], checkpoint)
 
 	position := headerSize
 	for _, offset := range offsets {
