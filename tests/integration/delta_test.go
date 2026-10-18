@@ -139,7 +139,7 @@ func openMutableGraph(t *testing.T, vertexCount int64, edges []graph.Edge) *stor
 
 	dir := t.TempDir()
 	snapshotPath := filepath.Join(dir, "graph.arcdb")
-	if err := storage.Save(snapshotPath, base); err != nil {
+	if err := storage.Save(snapshotPath, base, 0); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
 

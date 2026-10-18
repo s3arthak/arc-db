@@ -7,10 +7,12 @@
 package benchmarks
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/s3arthak/arcdb/internal/algorithms"
 	"github.com/s3arthak/arcdb/internal/graph"
+	"github.com/s3arthak/arcdb/internal/storage"
 )
 
 // outDegree is the fixed number of outgoing edges generated per vertex. A
@@ -132,6 +134,59 @@ func BenchmarkShortestPath(b *testing.B) {
 					b.Fatalf("ShortestPath(%d, %d) found = false, want true", source, target)
 				}
 				sinkPath = path
+			}
+		})
+	}
+}
+
+// BenchmarkCompact measures folding the logical graph into a new snapshot and
+// resetting the WAL. The prepared delta is folded on the first iteration; later
+// iterations rewrite the same logical graph with an empty delta, which is the
+// dominant cost of compaction. The graph, snapshot, and WAL are deterministic.
+func BenchmarkCompact(b *testing.B) {
+	sizes := []struct {
+		name     string
+		vertices int
+	}{
+		{name: "10k", vertices: 10_000},
+		{name: "100k", vertices: 100_000},
+	}
+
+	for _, size := range sizes {
+		b.Run(size.name, func(b *testing.B) {
+			dir := b.TempDir()
+			snapshotPath := filepath.Join(dir, "graph.arcdb")
+			walPath := filepath.Join(dir, "graph.wal")
+
+			base, err := graph.BuildFromEdges(int64(size.vertices), generateEdges(size.vertices))
+			if err != nil {
+				b.Fatalf("BuildFromEdges() error = %v", err)
+			}
+			if err := storage.Save(snapshotPath, base, 0); err != nil {
+				b.Fatalf("Save() error = %v", err)
+			}
+
+			mutable, err := storage.OpenMutableGraph(snapshotPath, walPath)
+			if err != nil {
+				b.Fatalf("OpenMutableGraph() error = %v", err)
+			}
+			defer mutable.Close()
+
+			// A small deterministic delta so compaction has something to fold.
+			for i := 0; i < 64; i++ {
+				source := uint32(i % size.vertices)
+				destination := uint32((i*13 + 1) % size.vertices)
+				if err := mutable.AddEdge(source, destination); err != nil {
+					b.Fatalf("AddEdge(%d, %d) error = %v", source, destination, err)
+				}
+			}
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if err := mutable.Compact(); err != nil {
+					b.Fatalf("Compact() error = %v", err)
+				}
 			}
 		})
 	}
