@@ -32,15 +32,25 @@ ArcDB is grown layer by layer. Each layer may only depend on the layers below it
 
 | Package | Owns | Must not know about |
 | ------- | ---- | ------------------- |
-| `internal/graph` | vertex/edge representation, CSR building, neighbor access | files, HTTP, planning |
+| `internal/graph` | vertex/edge representation, CSR building, delta overlay, logical view | files, HTTP, planning |
 | `internal/algorithms` | traversals over the graph interface | storage, wire formats |
 | `internal/planner` | cost estimation, strategy selection | parsing, I/O |
 | `internal/query` | lexer, parser, AST, validation | storage internals |
-| `internal/storage` | on-disk format, WAL, recovery | query syntax, planners |
+| `internal/storage` | snapshot format, WAL, mutable graph, recovery | query syntax, planners |
 | `internal/server` | request handling, wiring | algorithm details |
 
 The dependency direction is one-way: upper layers import lower layers, never the
 reverse. This keeps the graph kernel testable in isolation.
+
+## Logical graph
+
+`internal/graph` holds the immutable CSR snapshot and a mutable `Delta` of edges
+added since it was loaded; `View` merges both for reads. `internal/storage`
+owns the durable side: snapshots, the WAL, and `MutableGraph`, which enforces the
+order validate -> WAL append -> Sync -> delta update. Algorithms depend on a
+small `NeighborGraph` interface instead of a concrete graph type, so BFS and
+shortest path read the logical graph without importing storage. Compaction is
+deferred to a later phase; see [delta.md](../storage/delta.md).
 
 ## Phase gates
 

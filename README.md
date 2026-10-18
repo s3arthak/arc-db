@@ -6,9 +6,9 @@ ArcDB is an experiment in **adaptive graph traversal**: instead of hard-coding o
 execution strategy, the engine measures the shape of a query (fan-out, frontier
 size, direction balance) and picks the traversal that should be cheapest.
 
-> Status: **Phase 5 — write-ahead log and recovery.** Graphs can be built,
-> traversed, snapshotted, and mutated through an append-only log that replays
-> on top of a snapshot. Query planning and concurrency come later.
+> Status: **Phase 6 — mutable delta layer.** Graphs can be built, traversed,
+> snapshotted, and extended with WAL-backed edges held in a delta on top of the
+> immutable CSR. Query planning and concurrency come later.
 
 ## Why this exists
 
@@ -161,6 +161,31 @@ unknown vertices, and rebuilds the immutable graph. The format, replay policy,
 and durability boundary are documented in
 [docs/storage/wal.md](docs/storage/wal.md).
 
+## Mutable delta
+
+The immutable snapshot is never rewritten for a single edge. `storage.MutableGraph`
+adds WAL-backed edges to a delta and serves the logical graph:
+
+```go
+mutable, err := storage.OpenMutableGraph("graph.arcdb", "graph.wal")
+if err != nil {
+	log.Fatal(err)
+}
+
+// Validate, append to the WAL, Sync, then update the delta.
+if err := mutable.AddEdge(0, 3); err != nil {
+	log.Fatal(err)
+}
+
+neighbors, err := mutable.Neighbors(0) // snapshot neighbors, then delta edges
+order, err := algorithms.BFS(mutable, 0)
+```
+
+Reads merge snapshot and delta without duplicates; BFS and shortest path accept
+the `NeighborGraph` interface, so traversals see delta edges without importing
+storage. Recovery replays the WAL into a delta and does not rebuild the CSR.
+Compaction is deferred. See [docs/storage/delta.md](docs/storage/delta.md).
+
 ## Roadmap
 
 | Phase | Deliverable | Status |
@@ -171,10 +196,11 @@ and durability boundary are documented in
 | 3 | Benchmark baseline for kernel, BFS, shortest path | done |
 | 4 | CSR snapshot persistence (binary save/load) | done |
 | 5 | Write-ahead log + snapshot/WAL recovery | done |
-| 6 | Bidirectional BFS, profiling | next |
-| 7 | Adaptive execution controller (rule-based cost model) | planned |
-| 8 | Query language: lexer → parser → AST → plan → execute | planned |
-| 9 | Concurrency: snapshots, copy-on-write, delta layer | planned |
+| 6 | Mutable delta layer over immutable CSR | done |
+| 7 | Bidirectional BFS, profiling | next |
+| 8 | Adaptive execution controller (rule-based cost model) | planned |
+| 9 | Query language: lexer → parser → AST → plan → execute | planned |
+| 10 | Concurrency: snapshots, copy-on-write, compaction | planned |
 
 ## Design notes
 
@@ -182,6 +208,7 @@ and durability boundary are documented in
 - [ADR 0001 — CSR as the initial graph representation](docs/decisions/0001-csr-representation.md)
 - [Snapshot format](docs/storage/snapshot.md)
 - [Write-ahead log and recovery](docs/storage/wal.md)
+- [Mutable delta layer](docs/storage/delta.md)
 
 ## Contributing
 

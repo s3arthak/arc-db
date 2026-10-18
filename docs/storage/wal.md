@@ -122,6 +122,11 @@ Rebuilding rather than mutating keeps the CSR immutable; duplicate edges
 collapse exactly as they do during a normal build. The result is a normal
 immutable `Graph`, ready for traversal or a new snapshot.
 
+Phase 6 adds `storage.OpenMutableGraph`, which replays the same records into a
+delta instead of rebuilding the CSR. That is the recovery path used by the
+mutable layer; `Recover` remains the explicit way to materialize a new immutable
+graph. See [delta.md](delta.md).
+
 ## Limitations
 
 - **One writer.** No locking, group commit, or concurrent appends.
