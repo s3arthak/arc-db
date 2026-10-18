@@ -1,0 +1,6 @@
+# Keep LF in the repository so Linux CI and Windows checkouts agree.
+* text=auto eol=lf
+
+# Binary artifacts (future graph files, fixtures)
+*.bin binary
+*.dat binary

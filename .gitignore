@@ -1,0 +1,31 @@
+# Binaries
+/arcdb
+/arcdb.exe
+/bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test and profiling artifacts
+*.test
+*.out
+*.prof
+coverage.txt
+coverage.html
+
+# Benchmarks / scratch data
+benchmarks/**/*.dat
+/tmp/
+
+# Editor / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Local env
+.env
+.env.local
