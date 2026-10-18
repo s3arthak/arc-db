@@ -12,6 +12,17 @@ import (
 	"github.com/s3arthak/arcdb/internal/graph"
 )
 
+// NeighborGraph is the read-only contract traversals need: a vertex count and
+// the outgoing neighbors of a vertex.
+//
+// *graph.Graph satisfies it, and so does the logical snapshot+delta view in
+// internal/graph, which lets BFS and shortest path run over durably added edges
+// without knowing about storage or the WAL.
+type NeighborGraph interface {
+	VertexCount() int
+	Neighbors(vertex uint32) ([]uint32, error)
+}
+
 // BFS returns the vertices reachable from source in breadth-first visit order,
 // with source first.
 //
@@ -24,7 +35,7 @@ import (
 //
 // Time is O(V + E) over the reachable part of the graph; memory is O(V) for the
 // visited set, parent links, queue, and result.
-func BFS(g *graph.Graph, source uint32) ([]uint32, error) {
+func BFS(g NeighborGraph, source uint32) ([]uint32, error) {
 	if err := validateVertex(g, source, "source"); err != nil {
 		return nil, err
 	}
@@ -50,7 +61,7 @@ func BFS(g *graph.Graph, source uint32) ([]uint32, error) {
 //
 // Errors wrap graph.ErrVertexOutOfRange when source or target is not a vertex
 // of g. Time is O(V + E); memory is O(V).
-func ShortestPath(g *graph.Graph, source, target uint32) (path []uint32, found bool, err error) {
+func ShortestPath(g NeighborGraph, source, target uint32) (path []uint32, found bool, err error) {
 	if err := validateVertex(g, source, "source"); err != nil {
 		return nil, false, err
 	}
@@ -95,7 +106,7 @@ func (t traversal) pathTo(source, target uint32) []uint32 {
 
 // traverse runs the BFS loop and returns what it recorded. source must be a
 // valid vertex of g.
-func traverse(g *graph.Graph, source uint32) (traversal, error) {
+func traverse(g NeighborGraph, source uint32) (traversal, error) {
 	vertexCount := g.VertexCount()
 
 	// All four slices are sized for the worst case once, so the traversal
@@ -137,7 +148,7 @@ func traverse(g *graph.Graph, source uint32) (traversal, error) {
 
 // validateVertex returns an error wrapping graph.ErrVertexOutOfRange when v is
 // not a vertex of g. role names the argument in the error message.
-func validateVertex(g *graph.Graph, v uint32, role string) error {
+func validateVertex(g NeighborGraph, v uint32, role string) error {
 	if uint64(v) < uint64(g.VertexCount()) {
 		return nil
 	}
