@@ -6,9 +6,10 @@ ArcDB is an experiment in **adaptive graph traversal**: instead of hard-coding o
 execution strategy, the engine measures the shape of a query (fan-out, frontier
 size, direction balance) and picks the traversal that should be cheapest.
 
-> Status: **Phase 6 — mutable delta layer.** Graphs can be built, traversed,
-> snapshotted, and extended with WAL-backed edges held in a delta on top of the
-> immutable CSR. Query planning and concurrency come later.
+> Status: **Phase 7 — compaction and checkpointing.** Graphs can be built,
+> traversed, snapshotted, extended with WAL-backed edges in a delta, and folded
+> back into a new checkpoint snapshot. Query planning and concurrency come
+> later.
 
 ## Why this exists
 
@@ -130,11 +131,12 @@ if err := storage.Save("graph.arcdb", g); err != nil {
 loaded, err := storage.Load("graph.arcdb")
 ```
 
-The file is little-endian with a 28-byte header (magic `ARCDBSNP`, version 1,
-vertex and edge counts) followed by the raw offsets and edges. Loading treats
-the file as untrusted and validates the magic, version, size, counts, and every
-CSR invariant before returning a graph. The complete layout is documented in
-[docs/storage/snapshot.md](docs/storage/snapshot.md).
+The file is little-endian with a 32-byte header (magic `ARCDBSNP`, version 2,
+vertex and edge counts, and the WAL checkpoint) followed by the raw offsets and
+edges. Loading treats the file as untrusted and validates the magic, version,
+size, counts, and every CSR invariant before returning a graph. Version 1 files
+(no checkpoint) are rejected with `ErrUnsupportedVersion`. The complete layout
+is documented in [docs/storage/snapshot.md](docs/storage/snapshot.md).
 
 Mutations are recorded in a write-ahead log and only become durable after an
 explicit sync:
@@ -183,8 +185,26 @@ order, err := algorithms.BFS(mutable, 0)
 
 Reads merge snapshot and delta without duplicates; BFS and shortest path accept
 the `NeighborGraph` interface, so traversals see delta edges without importing
-storage. Recovery replays the WAL into a delta and does not rebuild the CSR.
-Compaction is deferred. See [docs/storage/delta.md](docs/storage/delta.md).
+storage. Recovery replays only WAL records newer than the snapshot checkpoint
+into a delta and does not rebuild the CSR. See
+[docs/storage/delta.md](docs/storage/delta.md).
+
+## Compaction
+
+`MutableGraph.Compact` folds snapshot + delta into a new snapshot, records the
+WAL checkpoint, and resets the log:
+
+```go
+if err := mutable.Compact(); err != nil {
+	log.Fatal(err)
+}
+```
+
+The new snapshot is written to a temporary file, synced, and atomically renamed
+over the authoritative one before the WAL is truncated or the delta cleared, so
+no crash point loses an acknowledged mutation. The logical graph, including BFS
+and shortest-path results, is unchanged. Ordering, crash windows, and
+limitations are documented in [docs/storage/compaction.md](docs/storage/compaction.md).
 
 ## Roadmap
 
@@ -197,10 +217,11 @@ Compaction is deferred. See [docs/storage/delta.md](docs/storage/delta.md).
 | 4 | CSR snapshot persistence (binary save/load) | done |
 | 5 | Write-ahead log + snapshot/WAL recovery | done |
 | 6 | Mutable delta layer over immutable CSR | done |
-| 7 | Bidirectional BFS, profiling | next |
-| 8 | Adaptive execution controller (rule-based cost model) | planned |
-| 9 | Query language: lexer → parser → AST → plan → execute | planned |
-| 10 | Concurrency: snapshots, copy-on-write, compaction | planned |
+| 7 | Compaction and WAL checkpointing | done |
+| 8 | Bidirectional BFS, profiling | next |
+| 9 | Adaptive execution controller (rule-based cost model) | planned |
+| 10 | Query language: lexer → parser → AST → plan → execute | planned |
+| 11 | Concurrency: snapshots, copy-on-write, background compaction | planned |
 
 ## Design notes
 
@@ -209,6 +230,7 @@ Compaction is deferred. See [docs/storage/delta.md](docs/storage/delta.md).
 - [Snapshot format](docs/storage/snapshot.md)
 - [Write-ahead log and recovery](docs/storage/wal.md)
 - [Mutable delta layer](docs/storage/delta.md)
+- [Compaction and checkpointing](docs/storage/compaction.md)
 
 ## Contributing
 

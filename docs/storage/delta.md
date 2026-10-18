@@ -91,12 +91,16 @@ Duplicate edges are a set operation:
 
 `storage.OpenMutableGraph(snapshotPath, walPath)`:
 
-1. Loads and validates the snapshot (`Load`), leaving it immutable.
+1. Loads and validates the snapshot and its checkpoint (`Load`), leaving the
+   CSR immutable.
 2. Creates an empty `graph.Delta`.
 3. Replays the WAL (`WAL.Replay`).
-4. Rejects records naming vertices outside the snapshot's vertex count.
-5. Applies each record to the delta (set semantics).
-6. Exposes `snapshot + delta` through the same `VertexCount`/`Neighbors` API.
+4. Skips records with `sequence <= checkpoint`, because the snapshot already
+   contains them.
+5. Rejects surviving records naming vertices outside the snapshot's vertex
+   count.
+6. Applies each surviving record to the delta (set semantics).
+7. Exposes `snapshot + delta` through the same `VertexCount`/`Neighbors` API.
 
 The CSR is **not** rebuilt during recovery, so startup does not pay a full graph
 rebuild. Rebuilding is still available through Phase 5's `storage.Recover`,
@@ -122,19 +126,21 @@ type NeighborGraph interface {
 `BFS` and `ShortestPath` traverse the logical graph, including delta edges, with
 no special cases.
 
-## Why compaction is deferred
+## Compaction
 
-Folding the delta back into CSR (writing a new snapshot and resetting the WAL)
-is intentionally out of scope for this phase. It is a durability operation with
-its own crash-window questions (when to write the snapshot, when to truncate the
-WAL), and it should be designed against measured costs rather than guessed. For
-now the delta simply grows.
+Phase 7 folds the logical graph back into a new snapshot with
+`MutableGraph.Compact`: it writes a temporary snapshot, syncs it, atomically
+replaces the authoritative file, records the WAL checkpoint, resets the log, and
+only then clears the delta. Sequence numbers and the snapshot checkpoint make
+recovery filter records that were already folded in. The ordering and crash
+windows are documented in [compaction.md](compaction.md); the delta itself still
+has no automatic scheduling.
 
 ## Limitations
 
 - **One writer, no concurrency.** No locks, no MVCC, no concurrent appends.
-- **Unbounded delta and WAL growth.** No compaction, checkpointing, or WAL
-  truncation yet.
+- **Growth between compactions.** The delta and WAL grow until an explicit
+  `Compact` call; there is no automatic scheduling or partial truncation.
 - **No deletes or vertex creation.** `ADD_EDGE` only, and both endpoints must
   already exist in the snapshot.
 - **Merge cost.** Every read of a vertex with delta edges scans the snapshot

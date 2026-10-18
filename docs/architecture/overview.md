@@ -49,8 +49,9 @@ added since it was loaded; `View` merges both for reads. `internal/storage`
 owns the durable side: snapshots, the WAL, and `MutableGraph`, which enforces the
 order validate -> WAL append -> Sync -> delta update. Algorithms depend on a
 small `NeighborGraph` interface instead of a concrete graph type, so BFS and
-shortest path read the logical graph without importing storage. Compaction is
-deferred to a later phase; see [delta.md](../storage/delta.md).
+shortest path read the logical graph without importing storage. `Compact` folds
+the logical graph into a new snapshot with a WAL checkpoint and resets the log;
+see [compaction.md](../storage/compaction.md).
 
 ## Phase gates
 
