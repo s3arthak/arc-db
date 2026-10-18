@@ -1,6 +1,6 @@
 # ADR 0001 — CSR as the initial graph representation
 
-- **Status:** accepted (implementation lands in Phase 1)
+- **Status:** accepted, implemented in Phase 1
 - **Date:** 2026-10-18
 - **Deciders:** project owner
 
@@ -63,7 +63,31 @@ representable as repeated offsets.
 
 ## Consequences
 
-Phase 1 builds: `NewGraph`/`BuildFromEdges`, `Neighbors(v)`, `VertexCount`,
-`EdgeCount`, with validation of out-of-range and negative IDs and deterministic
-output ordering. Benchmarks comparing CSR against an adjacency list belong in
+Phase 1 builds: `BuildFromEdges`, `Neighbors(v)`, `VertexCount`, `EdgeCount`,
+with validation of out-of-range and negative IDs and deterministic output
+ordering. Benchmarks comparing CSR against an adjacency list belong in
 `benchmarks/` before the representation is considered settled.
+
+## Implementation notes (Phase 1)
+
+These details were settled while writing `internal/graph`.
+
+- **Duplicate edges.** The kernel models a *simple* directed graph, not a
+  multigraph: identical `(from, to)` pairs are collapsed during construction,
+  keeping the first occurrence. Self-loops are preserved (and duplicate
+  self-loops collapse too). `EdgeCount` therefore reports unique edges, which
+  may be smaller than the number of input rows.
+- **Edge-list IDs are `int64`.** The in-memory CSR stores targets as `uint32`,
+  but the builder accepts `int64` so negative IDs can be rejected explicitly
+  instead of wrapping. Valid IDs must be in `[0, vertexCount)` and
+  `vertexCount` may not exceed 2^32.
+- **Ordering.** Neighborhoods follow the order in which their edges first appear
+  in the input list. No map iteration order is involved, so identical input
+  always produces identical `Offsets` and `Edges`.
+- **Complexity.** Construction is `O(V + E)` expected time and `O(V + E)` space:
+  deduplication uses a hash set, then degrees are counted, prefix-summed into
+  offsets, and the targets are scattered. `Neighbors` is `O(1)` to locate the
+  range and `O(degree(v))` to read, with no allocation.
+- **Invariants.** `Graph.Validate` re-checks offsets (start at 0, non-decreasing,
+  final entry equals `len(Edges)`) and every target (`< VertexCount`). It exists
+  for hand-built graphs and for data loaded from disk later.

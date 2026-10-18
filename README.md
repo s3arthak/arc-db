@@ -6,8 +6,8 @@ ArcDB is an experiment in **adaptive graph traversal**: instead of hard-coding o
 execution strategy, the engine measures the shape of a query (fan-out, frontier
 size, direction balance) and picks the traversal that should be cheapest.
 
-> Status: **Phase 0 — repository bootstrap.** No database code yet. The plan is
-> intentionally sequenced so each phase is understood before it is built.
+> Status: **Phase 1 — CSR graph kernel.** An immutable directed graph can be
+> built from an edge list and queried for neighbors. Traversals come next.
 
 ## Why this exists
 
@@ -51,20 +51,48 @@ Only cross-cutting tests go in `tests/`.
 ## Build, test, run
 
 ```bash
-go run ./cmd/arcdb     # ArcDB 0.0.0 (phase 0: repository bootstrap)
+go run ./cmd/arcdb     # ArcDB 0.1.0 (phase 1: CSR graph kernel)
 go build ./...
 go vet ./...
 go test ./...
 go test -race ./...
 ```
 
+## Graph kernel
+
+`internal/graph` turns a directed edge list into two flat arrays
+(`Offsets` + `Edges`) and answers neighbor lookups without per-vertex
+allocations:
+
+```go
+edges := []graph.Edge{
+	{From: 0, To: 1},
+	{From: 0, To: 2},
+	{From: 0, To: 3},
+	{From: 1, To: 3},
+	{From: 2, To: 3},
+}
+
+g, err := graph.BuildFromEdges(4, edges)
+// g.Offsets == [0 3 4 5 5]
+// g.Edges   == [1 2 3 3 3]
+// g.VertexCount() == 4, g.EdgeCount() == 5
+
+neighbors, err := g.Neighbors(0) // [1 2 3]
+```
+
+Duplicate edges are collapsed (simple directed graph), self-loops are kept,
+invalid IDs are rejected with `ErrVertexOutOfRange`, and identical input always
+produces identical arrays. Build is `O(V + E)` expected; `Neighbors` is `O(1)`
+plus `O(degree(v))` to read.
+
 ## Roadmap
 
 | Phase | Deliverable | Status |
 | ----- | ----------- | ------ |
 | 0 | Repository, CI, build/test loop | done |
-| 1 | Immutable CSR graph + builder + `Neighbors` | next |
-| 2 | BFS, shortest path reconstruction | planned |
+| 1 | Immutable CSR graph + builder + `Neighbors` | done |
+| 2 | BFS, shortest path reconstruction | next |
 | 3 | Bidirectional BFS, benchmarks, profiling | planned |
 | 4 | Adaptive execution controller (rule-based cost model) | planned |
 | 5 | Persistence: versioned binary format | planned |
