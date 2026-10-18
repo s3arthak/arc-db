@@ -6,9 +6,9 @@ ArcDB is an experiment in **adaptive graph traversal**: instead of hard-coding o
 execution strategy, the engine measures the shape of a query (fan-out, frontier
 size, direction balance) and picks the traversal that should be cheapest.
 
-> Status: **Phase 2 — BFS traversal.** Graphs can be built from an edge list and
-traversed breadth-first, including shortest-path reconstruction. Persistence
-and query planning come later.
+> Status: **Phase 4 — snapshot persistence.** Graphs can be built, traversed,
+> and saved to a versioned binary snapshot that loads back as the same CSR.
+> WAL, recovery, and query planning come later.
 
 ## Why this exists
 
@@ -117,6 +117,26 @@ go test -bench=. -benchmem ./benchmarks/graph/...
 See [benchmarks/README.md](benchmarks/README.md) for the graph generator, what
 `ns/op`, `B/op`, and `allocs/op` mean, and how to run a single size.
 
+## Persistence
+
+`internal/storage` saves an immutable CSR graph to a binary snapshot and loads
+it back without rebuilding from an edge list:
+
+```go
+if err := storage.Save("graph.arcdb", g); err != nil {
+	log.Fatal(err)
+}
+
+loaded, err := storage.Load("graph.arcdb")
+```
+
+The file is little-endian with a 28-byte header (magic `ARCDBSNP`, version 1,
+vertex and edge counts) followed by the raw offsets and edges. Loading treats
+the file as untrusted and validates the magic, version, size, counts, and every
+CSR invariant before returning a graph. The complete layout is documented in
+[docs/storage/snapshot.md](docs/storage/snapshot.md). There is no WAL or crash
+recovery yet.
+
 ## Roadmap
 
 | Phase | Deliverable | Status |
@@ -125,9 +145,9 @@ See [benchmarks/README.md](benchmarks/README.md) for the graph generator, what
 | 1 | Immutable CSR graph + builder + `Neighbors` | done |
 | 2 | BFS, shortest path reconstruction | done |
 | 3 | Benchmark baseline for kernel, BFS, shortest path | done |
-| 4 | Bidirectional BFS, profiling | next |
-| 5 | Adaptive execution controller (rule-based cost model) | planned |
-| 6 | Persistence: versioned binary format | planned |
+| 4 | CSR snapshot persistence (binary save/load) | done |
+| 5 | Bidirectional BFS, profiling | next |
+| 6 | Adaptive execution controller (rule-based cost model) | planned |
 | 7 | WAL + crash recovery | planned |
 | 8 | Query language: lexer → parser → AST → plan → execute | planned |
 | 9 | Concurrency: snapshots, copy-on-write, delta layer | planned |
@@ -136,6 +156,7 @@ See [benchmarks/README.md](benchmarks/README.md) for the graph generator, what
 
 - [Architecture overview](docs/architecture/overview.md)
 - [ADR 0001 — CSR as the initial graph representation](docs/decisions/0001-csr-representation.md)
+- [Snapshot format](docs/storage/snapshot.md)
 
 ## Contributing
 
