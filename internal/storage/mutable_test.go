@@ -20,7 +20,7 @@ func TestMutableGraphAddsEdgesToSnapshotGraph(t *testing.T) {
 		{From: 0, To: 1},
 		{From: 1, To: 2},
 	})
-	if err := Save(snapshotPath, base); err != nil {
+	if err := Save(snapshotPath, base, 0); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
 
@@ -51,7 +51,7 @@ func TestMutableGraphAddEdgeFromVertexWithoutSnapshotEdges(t *testing.T) {
 	walPath := filepath.Join(dir, "graph.wal")
 
 	base := buildGraph(t, 3, []graph.Edge{{From: 0, To: 1}})
-	if err := Save(snapshotPath, base); err != nil {
+	if err := Save(snapshotPath, base, 0); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
 
@@ -70,7 +70,7 @@ func TestMutableGraphDuplicateEdgesStayUnique(t *testing.T) {
 	walPath := filepath.Join(dir, "graph.wal")
 
 	base := buildGraph(t, 3, []graph.Edge{{From: 0, To: 1}})
-	if err := Save(snapshotPath, base); err != nil {
+	if err := Save(snapshotPath, base, 0); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
 
@@ -115,7 +115,7 @@ func TestMutableGraphSelfLoop(t *testing.T) {
 	walPath := filepath.Join(dir, "graph.wal")
 
 	base := buildGraph(t, 2, nil)
-	if err := Save(snapshotPath, base); err != nil {
+	if err := Save(snapshotPath, base, 0); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
 
@@ -143,7 +143,7 @@ func TestMutableGraphRejectsInvalidVertices(t *testing.T) {
 			walPath := filepath.Join(dir, "graph.wal")
 
 			base := buildGraph(t, 3, []graph.Edge{{From: 0, To: 1}})
-			if err := Save(snapshotPath, base); err != nil {
+			if err := Save(snapshotPath, base, 0); err != nil {
 				t.Fatalf("Save() error = %v", err)
 			}
 
@@ -229,15 +229,15 @@ func TestOpenMutableGraphRecoversWALIntoDelta(t *testing.T) {
 		{From: 0, To: 1},
 		{From: 1, To: 2},
 	})
-	if err := Save(snapshotPath, base); err != nil {
+	if err := Save(snapshotPath, base, 0); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
 
 	wal := openTestWAL(t, walPath)
 	appendTestEdges(t, wal,
-		AddEdge{Source: 2, Destination: 3},
-		AddEdge{Source: 4, Destination: 0},
-		AddEdge{Source: 0, Destination: 1}, // already in the snapshot
+		AddEdge{Sequence: 1, Source: 2, Destination: 3},
+		AddEdge{Sequence: 2, Source: 4, Destination: 0},
+		AddEdge{Sequence: 3, Source: 0, Destination: 1}, // already in the snapshot
 	)
 	if err := wal.Sync(); err != nil {
 		t.Fatalf("Sync() error = %v", err)
@@ -259,11 +259,11 @@ func TestOpenMutableGraphRejectsInvalidWALVertices(t *testing.T) {
 	}{
 		{
 			name:      "invalid destination",
-			mutations: []AddEdge{{Source: 0, Destination: 5}},
+			mutations: []AddEdge{{Sequence: 1, Source: 0, Destination: 5}},
 		},
 		{
 			name:      "invalid source",
-			mutations: []AddEdge{{Source: 5, Destination: 0}},
+			mutations: []AddEdge{{Sequence: 1, Source: 5, Destination: 0}},
 		},
 	}
 
@@ -274,7 +274,7 @@ func TestOpenMutableGraphRejectsInvalidWALVertices(t *testing.T) {
 			walPath := filepath.Join(dir, "graph.wal")
 
 			base := buildGraph(t, 3, []graph.Edge{{From: 0, To: 1}})
-			if err := Save(snapshotPath, base); err != nil {
+			if err := Save(snapshotPath, base, 0); err != nil {
 				t.Fatalf("Save() error = %v", err)
 			}
 
@@ -304,7 +304,7 @@ func TestMutableGraphDoesNotRewriteSnapshot(t *testing.T) {
 	walPath := filepath.Join(dir, "graph.wal")
 
 	base := buildGraph(t, 3, []graph.Edge{{From: 0, To: 1}})
-	if err := Save(snapshotPath, base); err != nil {
+	if err := Save(snapshotPath, base, 0); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
 	before, err := os.ReadFile(snapshotPath)
@@ -340,22 +340,29 @@ var (
 type fakeWAL struct {
 	appendErr error
 	syncErr   error
+	resetErr  error
 	appended  []AddEdge
 	syncs     int
+	resets    int
 	closed    bool
 }
 
-func (f *fakeWAL) AppendAddEdge(source, destination uint32) error {
+func (f *fakeWAL) AppendAddEdge(sequence uint64, source, destination uint32) error {
 	if f.appendErr != nil {
 		return f.appendErr
 	}
-	f.appended = append(f.appended, AddEdge{Source: source, Destination: destination})
+	f.appended = append(f.appended, AddEdge{Sequence: sequence, Source: source, Destination: destination})
 	return nil
 }
 
 func (f *fakeWAL) Sync() error {
 	f.syncs++
 	return f.syncErr
+}
+
+func (f *fakeWAL) Reset() error {
+	f.resets++
+	return f.resetErr
 }
 
 func (f *fakeWAL) Close() error {
