@@ -23,7 +23,7 @@ import (
 // wraps graph.ErrVertexOutOfRange when source is not a vertex of g.
 //
 // Time is O(V + E) over the reachable part of the graph; memory is O(V) for the
-// visited set, queue, and result.
+// visited set, parent links, queue, and result.
 func BFS(g *graph.Graph, source uint32) ([]uint32, error) {
 	if err := validateVertex(g, source, "source"); err != nil {
 		return nil, err
