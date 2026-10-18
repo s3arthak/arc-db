@@ -8,9 +8,10 @@ edge list -> graph.BuildFromEdges -> CSR -> storage.Save -> snapshot
 snapshot  -> storage.Load                      -> CSR (equivalent graph)
 ```
 
-The implementation lives in `internal/storage/snapshot.go`. This is not a
-storage engine: there is no write-ahead log, no mutation, no recovery, and no
-compression. A snapshot is written once and read back whole.
+The implementation lives in `internal/storage/snapshot.go`. A snapshot is a
+checkpoint: it captures a full immutable graph and is written once and read back
+whole. Mutations are logged separately in the write-ahead log described in
+[wal.md](wal.md); this document covers only the snapshot file.
 
 ## Binary layout
 

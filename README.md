@@ -6,9 +6,9 @@ ArcDB is an experiment in **adaptive graph traversal**: instead of hard-coding o
 execution strategy, the engine measures the shape of a query (fan-out, frontier
 size, direction balance) and picks the traversal that should be cheapest.
 
-> Status: **Phase 4 — snapshot persistence.** Graphs can be built, traversed,
-> and saved to a versioned binary snapshot that loads back as the same CSR.
-> WAL, recovery, and query planning come later.
+> Status: **Phase 5 — write-ahead log and recovery.** Graphs can be built,
+> traversed, snapshotted, and mutated through an append-only log that replays
+> on top of a snapshot. Query planning and concurrency come later.
 
 ## Why this exists
 
@@ -134,8 +134,32 @@ The file is little-endian with a 28-byte header (magic `ARCDBSNP`, version 1,
 vertex and edge counts) followed by the raw offsets and edges. Loading treats
 the file as untrusted and validates the magic, version, size, counts, and every
 CSR invariant before returning a graph. The complete layout is documented in
-[docs/storage/snapshot.md](docs/storage/snapshot.md). There is no WAL or crash
-recovery yet.
+[docs/storage/snapshot.md](docs/storage/snapshot.md).
+
+Mutations are recorded in a write-ahead log and only become durable after an
+explicit sync:
+
+```go
+wal, err := storage.OpenWAL("graph.wal")
+if err != nil {
+	log.Fatal(err)
+}
+
+if err := wal.AppendAddEdge(0, 1); err != nil {
+	log.Fatal(err)
+}
+if err := wal.Sync(); err != nil { // durable from here on
+	log.Fatal(err)
+}
+
+recovered, err := storage.Recover("graph.arcdb", "graph.wal")
+```
+
+The WAL stores one record type, `ADD_EDGE`, in a fixed little-endian framing.
+Recovery loads the snapshot, replays complete records, rejects records with
+unknown vertices, and rebuilds the immutable graph. The format, replay policy,
+and durability boundary are documented in
+[docs/storage/wal.md](docs/storage/wal.md).
 
 ## Roadmap
 
@@ -146,9 +170,9 @@ recovery yet.
 | 2 | BFS, shortest path reconstruction | done |
 | 3 | Benchmark baseline for kernel, BFS, shortest path | done |
 | 4 | CSR snapshot persistence (binary save/load) | done |
-| 5 | Bidirectional BFS, profiling | next |
-| 6 | Adaptive execution controller (rule-based cost model) | planned |
-| 7 | WAL + crash recovery | planned |
+| 5 | Write-ahead log + snapshot/WAL recovery | done |
+| 6 | Bidirectional BFS, profiling | next |
+| 7 | Adaptive execution controller (rule-based cost model) | planned |
 | 8 | Query language: lexer → parser → AST → plan → execute | planned |
 | 9 | Concurrency: snapshots, copy-on-write, delta layer | planned |
 
@@ -157,6 +181,7 @@ recovery yet.
 - [Architecture overview](docs/architecture/overview.md)
 - [ADR 0001 — CSR as the initial graph representation](docs/decisions/0001-csr-representation.md)
 - [Snapshot format](docs/storage/snapshot.md)
+- [Write-ahead log and recovery](docs/storage/wal.md)
 
 ## Contributing
 
