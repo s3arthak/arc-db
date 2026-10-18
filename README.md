@@ -6,8 +6,9 @@ ArcDB is an experiment in **adaptive graph traversal**: instead of hard-coding o
 execution strategy, the engine measures the shape of a query (fan-out, frontier
 size, direction balance) and picks the traversal that should be cheapest.
 
-> Status: **Phase 1 — CSR graph kernel.** An immutable directed graph can be
-> built from an edge list and queried for neighbors. Traversals come next.
+> Status: **Phase 2 — BFS traversal.** Graphs can be built from an edge list and
+traversed breadth-first, including shortest-path reconstruction. Persistence
+and query planning come later.
 
 ## Why this exists
 
@@ -51,7 +52,7 @@ Only cross-cutting tests go in `tests/`.
 ## Build, test, run
 
 ```bash
-go run ./cmd/arcdb     # ArcDB 0.1.0 (phase 1: CSR graph kernel)
+go run ./cmd/arcdb     # ArcDB 0.2.0 (phase 2: BFS traversal)
 go build ./...
 go vet ./...
 go test ./...
@@ -86,14 +87,31 @@ invalid IDs are rejected with `ErrVertexOutOfRange`, and identical input always
 produces identical arrays. Build is `O(V + E)` expected; `Neighbors` is `O(1)`
 plus `O(degree(v))` to read.
 
+## Traversals
+
+`internal/algorithms` walks the graph through `Neighbors` only, so traversal
+logic is independent of the physical CSR layout:
+
+```go
+order, err := algorithms.BFS(g, 0) // [0 1 2 3 4 5]
+
+path, found, err := algorithms.ShortestPath(g, 0, 5)
+// path == [0 1 3 5] (or [0 2 4 5]), found == true
+```
+
+BFS is `O(V + E)` time and `O(V)` memory. When several shortest paths have the
+same length, the one returned follows first-discovery order, which comes from
+the edge order used to build the graph. See
+[docs/algorithms/bfs.md](docs/algorithms/bfs.md).
+
 ## Roadmap
 
 | Phase | Deliverable | Status |
 | ----- | ----------- | ------ |
 | 0 | Repository, CI, build/test loop | done |
 | 1 | Immutable CSR graph + builder + `Neighbors` | done |
-| 2 | BFS, shortest path reconstruction | next |
-| 3 | Bidirectional BFS, benchmarks, profiling | planned |
+| 2 | BFS, shortest path reconstruction | done |
+| 3 | Bidirectional BFS, benchmarks, profiling | next |
 | 4 | Adaptive execution controller (rule-based cost model) | planned |
 | 5 | Persistence: versioned binary format | planned |
 | 6 | WAL + crash recovery | planned |
