@@ -131,7 +131,7 @@ if err := storage.Save("graph.arcdb", g); err != nil {
 loaded, err := storage.Load("graph.arcdb")
 ```
 
-The file is little-endian with a 32-byte header (magic `ARCDBSNP`, version 2,
+The file is little-endian with a 36-byte header (magic `ARCDBSNP`, version 2,
 vertex and edge counts, and the WAL checkpoint) followed by the raw offsets and
 edges. Loading treats the file as untrusted and validates the magic, version,
 size, counts, and every CSR invariant before returning a graph. Version 1 files
